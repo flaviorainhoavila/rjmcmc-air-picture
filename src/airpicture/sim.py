@@ -229,12 +229,13 @@ _INK = "#1a1a19"
 _MUTED = "#8c8b84"
 
 
-def plot_scenario(scenario: Scenario, ax=None, show_clutter: bool = True):
+def plot_scenario(scenario: Scenario, ax=None, show_clutter: bool = True, window=None):
     """Plot true trajectories and detections in Cartesian coordinates (km).
 
     Detections are mapped to the plane with the nominal (zero-bias) model, which is
-    what a tracker that ignores the bias sees: Radar B's detections sit visibly off
-    the true trajectories.
+    what a tracker that ignores the bias sees: Radar B's detections sit off the true
+    trajectories. `window` is ((x0, x1), (y0, y1)) in km; by default the whole
+    region and both radars are shown. The caller adds the legend and title.
     """
     import matplotlib.pyplot as plt
 
@@ -312,19 +313,75 @@ def plot_scenario(scenario: Scenario, ax=None, show_clutter: bool = True):
     ax.set_xlabel("x (km)")
     ax.set_ylabel("y (km)")
     ax.set_aspect("equal")
-    ax.set_xlim(x0 / 1e3 - 10, x1 / 1e3 + 10)
-    ax.set_ylim(min(r.position[1] for r in cfg.radars) / 1e3 - 8, y1 / 1e3 + 5)
+    if window is None:
+        window = (
+            (x0 / 1e3 - 10, x1 / 1e3 + 10),
+            (min(r.position[1] for r in cfg.radars) / 1e3 - 8, y1 / 1e3 + 5),
+        )
+    ax.set_xlim(*window[0])
+    ax.set_ylim(*window[1])
     ax.grid(color="#e4e3dc", linewidth=0.6)
     ax.set_axisbelow(True)
     for spine in ("top", "right"):
         ax.spines[spine].set_visible(False)
-    ax.legend(loc="upper right", fontsize=8, frameon=False)
-    n_targets = len(scenario.truth_tracks())
-    ax.set_title(
-        f"Scenario, seed {scenario.seed}: {n_targets} targets over {cfg.n_scans} scans",
-        loc="left",
-        color=_INK,
-    )
+    return ax
+
+
+def detection_errors(scenario: Scenario, radar: Radar, bias=(0.0, 0.0)) -> np.ndarray:
+    """Cartesian position errors (m) of a radar's target-originated detections.
+
+    Each detection is mapped to the plane with `bias` (zero by default, as a
+    bias-ignoring tracker would) and compared with the true position of its target.
+    """
+    errors = []
+    for scan in scenario.scans:
+        det = scan.detections[radar.name]
+        is_target = det.origin != CLUTTER
+        if not np.any(is_target):
+            continue
+        row = {tid: i for i, tid in enumerate(scan.truth_ids)}
+        truth = scan.truth_states[[row[o] for o in det.origin[is_target]], :2]
+        errors.append(radar.to_cartesian(det.z[is_target], bias=bias) - truth)
+    return np.vstack(errors) if errors else np.zeros((0, 2))
+
+
+def plot_detection_errors(scenario: Scenario, ax=None):
+    """Scatter of detection position errors (m) per radar, with the bias ignored."""
+    import matplotlib.pyplot as plt
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(5.0, 5.0), layout="constrained")
+    for i, radar in enumerate(scenario.config.radars):
+        style = _RADAR_STYLE[i % len(_RADAR_STYLE)]
+        e = detection_errors(scenario, radar)
+        ax.scatter(
+            *e.T,
+            s=12,
+            marker=style["marker"],
+            color=style["color"],
+            linewidths=0,
+            alpha=0.6,
+            label=f"Radar {radar.name}",
+        )
+        ax.annotate(
+            f"Radar {radar.name}",
+            e.mean(axis=0),
+            xytext=(0, 14),
+            textcoords="offset points",
+            ha="center",
+            color=_INK,
+            fontweight="bold",
+            bbox={"boxstyle": "round,pad=0.2", "facecolor": "white", "edgecolor": "none"},
+        )
+    ax.axhline(0.0, color=_MUTED, linewidth=0.8)
+    ax.axvline(0.0, color=_MUTED, linewidth=0.8)
+    ax.set_xlabel("x error (m)")
+    ax.set_ylabel("y error (m)")
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.grid(color="#e4e3dc", linewidth=0.6)
+    ax.set_axisbelow(True)
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
     return ax
 
 

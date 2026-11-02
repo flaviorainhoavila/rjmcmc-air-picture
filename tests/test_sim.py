@@ -5,7 +5,15 @@ import numpy as np
 import pytest
 
 from airpicture.models import wrap_angle
-from airpicture.sim import CLUTTER, ScenarioConfig, load_config, plot_scenario, simulate
+from airpicture.sim import (
+    CLUTTER,
+    ScenarioConfig,
+    detection_errors,
+    load_config,
+    plot_detection_errors,
+    plot_scenario,
+    simulate,
+)
 
 CONFIG = Path(__file__).parents[1] / "configs" / "benchmark.yaml"
 
@@ -117,6 +125,19 @@ def test_plot_scenario_runs(cfg):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    ax = plot_scenario(simulate(cfg, seed=0))
+    sc = simulate(cfg, seed=0)
+    ax = plot_scenario(sc)
     assert ax.get_xlabel() == "x (km)"
     plt.close(ax.figure)
+    ax = plot_detection_errors(sc)
+    plt.close(ax.figure)
+
+
+def test_detection_errors_with_and_without_bias(long_cfg):
+    sc = simulate(long_cfg, seed=6)
+    a, b = long_cfg.radar("A"), long_cfg.radar("B")
+    # Unbiased radar, or biased radar with its true bias: errors centred on zero.
+    assert np.linalg.norm(detection_errors(sc, a).mean(axis=0)) < 10.0
+    assert np.linalg.norm(detection_errors(sc, b, bias=b.bias).mean(axis=0)) < 10.0
+    # Biased radar with the bias ignored: displaced by hundreds of metres.
+    assert np.linalg.norm(detection_errors(sc, b).mean(axis=0)) > 200.0
